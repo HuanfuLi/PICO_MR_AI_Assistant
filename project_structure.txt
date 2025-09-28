@@ -1,0 +1,166 @@
+IrisAgentC/
+├── .gitignore
+├── .gradle
+│   ├── 9.0.0
+│   │   ├── checksums
+│   │   │   ├── checksums.lock
+│   │   │   ├── md5-checksums.bin
+│   │   │   └── sha1-checksums.bin
+│   │   ├── executionHistory
+│   │   │   └── executionHistory.lock
+│   │   ├── expanded
+│   │   ├── fileChanges
+│   │   │   └── last-build.bin
+│   │   ├── fileHashes
+│   │   │   ├── fileHashes.bin
+│   │   │   ├── fileHashes.lock
+│   │   │   └── resourceHashesCache.bin
+│   │   ├── gc.properties
+│   │   └── vcsMetadata
+│   ├── buildOutputCleanup
+│   │   ├── buildOutputCleanup.lock
+│   │   └── cache.properties
+│   ├── config.properties
+│   └── vcs-1
+│       └── gc.properties
+├── app
+│   ├── .cxx
+│   │   ├── Debug
+│   │   │   └── 6f1s5j1m
+│   │   │       ├── hash_key.txt
+│   │   │       └── x86
+│   │   │           ├── .cmake
+│   │   │           │   └── api
+│   │   │           │       └── v1
+│   │   │           │           ├── query
+│   │   │           │           │   └── client-agp
+│   │   │           │           │       ├── cache-v2
+│   │   │           │           │       ├── cmakeFiles-v1
+│   │   │           │           │       └── codemodel-v2
+│   │   │           │           └── reply
+│   │   │           │               ├── cache-v2-52530397a61280d549a2.json
+│   │   │           │               ├── cmakeFiles-v1-4ab8d4d972f7d8245a41.json
+│   │   │           │               ├── codemodel-v2-d16064363e756c4ce7b4.json
+│   │   │           │               ├── directory-.-Debug-f5ebdc15457944623624.json
+│   │   │           │               ├── index-2025-09-28T04-05-41-0373.json
+│   │   │           │               └── target-irisagentc-Debug-28c1e26493af0b157c76.json
+│   │   │           ├── CMakeCache.txt
+│   │   │           ├── CMakeFiles
+│   │   │           │   ├── 3.22.1-g37088a8
+│   │   │           │   │   ├── CMakeCCompiler.cmake
+│   │   │           │   │   ├── CMakeCXXCompiler.cmake
+│   │   │           │   │   ├── CMakeDetermineCompilerABI_C.bin
+│   │   │           │   │   ├── CMakeDetermineCompilerABI_CXX.bin
+│   │   │           │   │   ├── CMakeSystem.cmake
+│   │   │           │   │   ├── CompilerIdC
+│   │   │           │   │   │   ├── CMakeCCompilerId.c
+│   │   │           │   │   │   ├── CMakeCCompilerId.o
+│   │   │           │   │   │   └── tmp
+│   │   │           │   │   └── CompilerIdCXX
+│   │   │           │   │       ├── CMakeCXXCompilerId.cpp
+│   │   │           │   │       ├── CMakeCXXCompilerId.o
+│   │   │           │   │       └── tmp
+│   │   │           │   ├── CMakeOutput.log
+│   │   │           │   ├── CMakeTmp
+│   │   │           │   ├── TargetDirectories.txt
+│   │   │           │   ├── cmake.check_cache
+│   │   │           │   ├── irisagentc.dir
+│   │   │           │   └── rules.ninja
+│   │   │           ├── additional_project_files.txt
+│   │   │           ├── android_gradle_build.json
+│   │   │           ├── android_gradle_build_mini.json
+│   │   │           ├── build.ninja
+│   │   │           ├── build_file_index.txt
+│   │   │           ├── cmake_install.cmake
+│   │   │           ├── compile_commands.json
+│   │   │           ├── compile_commands.json.bin
+│   │   │           ├── configure_fingerprint.bin
+│   │   │           ├── metadata_generation_command.txt
+│   │   │           ├── prefab_config.json
+│   │   │           └── symbol_folder_index.txt
+│   │   └── tools
+│   │       └── debug
+│   │           └── x86
+│   │               └── compile_commands.json
+│   ├── .gitignore
+│   ├── build.gradle.kts
+│   ├── libs
+│   │   └── arm64-v8a
+│   │       └── libopenxr_loader.so
+│   ├── proguard-rules.pro
+│   └── src
+│       ├── androidTest
+│       │   └── java
+│       │       └── cnit355
+│       │           └── finalproject
+│       │               └── irisagentc
+│       │                   └── ExampleInstrumentedTest.java
+│       ├── main
+│       │   ├── AndroidManifest.xml
+│       │   ├── cpp
+│       │   │   ├── CMakeLists.txt
+│       │   │   ├── include
+│       │   │   │   └── openxr
+│       │   │   │       ├── openxr.h
+│       │   │   │       ├── openxr_loader_negotiation.h
+│       │   │   │       ├── openxr_platform.h
+│       │   │   │       ├── openxr_platform_defines.h
+│       │   │   │       ├── openxr_reflection.h
+│       │   │   │       ├── openxr_reflection_parent_structs.h
+│       │   │   │       └── openxr_reflection_structs.h
+│       │   │   └── native-lib.cpp
+│       │   ├── java
+│       │   │   └── cnit355
+│       │   │       └── finalproject
+│       │   │           └── irisagentc
+│       │   │               └── MainActivity.java
+│       │   └── res
+│       │       ├── drawable
+│       │       │   ├── ic_launcher_background.xml
+│       │       │   └── ic_launcher_foreground.xml
+│       │       ├── layout
+│       │       │   └── activity_main.xml
+│       │       ├── mipmap-anydpi
+│       │       │   ├── ic_launcher.xml
+│       │       │   └── ic_launcher_round.xml
+│       │       ├── mipmap-hdpi
+│       │       │   ├── ic_launcher.webp
+│       │       │   └── ic_launcher_round.webp
+│       │       ├── mipmap-mdpi
+│       │       │   ├── ic_launcher.webp
+│       │       │   └── ic_launcher_round.webp
+│       │       ├── mipmap-xhdpi
+│       │       │   ├── ic_launcher.webp
+│       │       │   └── ic_launcher_round.webp
+│       │       ├── mipmap-xxhdpi
+│       │       │   ├── ic_launcher.webp
+│       │       │   └── ic_launcher_round.webp
+│       │       ├── mipmap-xxxhdpi
+│       │       │   ├── ic_launcher.webp
+│       │       │   └── ic_launcher_round.webp
+│       │       ├── values
+│       │       │   ├── colors.xml
+│       │       │   ├── strings.xml
+│       │       │   └── themes.xml
+│       │       ├── values-night
+│       │       │   └── themes.xml
+│       │       └── xml
+│       │           ├── backup_rules.xml
+│       │           └── data_extraction_rules.xml
+│       └── test
+│           └── java
+│               └── cnit355
+│                   └── finalproject
+│                       └── irisagentc
+│                           └── ExampleUnitTest.java
+├── build.gradle.kts
+├── gradle
+│   ├── libs.versions.toml
+│   └── wrapper
+│       ├── gradle-wrapper.jar
+│       └── gradle-wrapper.properties
+├── gradle.properties
+├── gradlew
+├── gradlew.bat
+├── local.properties
+└── settings.gradle.kts
