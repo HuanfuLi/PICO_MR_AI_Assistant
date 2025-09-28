@@ -19,7 +19,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         // A SurfaceView is still useful for giving the app a window handle
-        setContentView(new SurfaceView(this));
+//        setContentView(new SurfaceView(this));
         Log.i(TAG, "Activity onCreate: Calling native layer.");
 
         // 2. Pass the activity context and asset manager to the native layer for initialization.
