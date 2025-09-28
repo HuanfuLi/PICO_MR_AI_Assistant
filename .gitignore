@@ -38,3 +38,6 @@ app/.cxx/
 # Other generated files
 *~
 .DS_Store
+
+# Utility scripts
+generate_structure.py

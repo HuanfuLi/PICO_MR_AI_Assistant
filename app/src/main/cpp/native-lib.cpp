@@ -2,18 +2,18 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <mutex>
+#include <condition_variable>
+#include <cmath> // For sinf and cosf
 
-// Android Logging
 #include <android/log.h>
 #include <android/native_window.h>
 
-// --- FIX: EGL/GLES headers must be included BEFORE OpenXR headers ---
-// EGL and GLES definitions are needed by openxr_platform.h
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 #include <GLES3/gl3ext.h>
 
-// OpenXR Headers
 #define XR_USE_PLATFORM_ANDROID
 #define XR_USE_GRAPHICS_API_OPENGL_ES
 #include <openxr/openxr.h>
@@ -23,21 +23,123 @@
 #define LOG_TAG "IrisAgent_Native"
 #define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define ALOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
 
 #define OXR_CHECK(instance, result, message) \
-    if (XR_FAILED(result)) { \
+    [&](XrResult res) { \
+        if (XR_SUCCEEDED(res)) return res; \
         char resultString[XR_MAX_RESULT_STRING_SIZE]; \
         if (instance != XR_NULL_HANDLE) { \
-            xrResultToString(instance, result, resultString); \
+            xrResultToString(instance, res, resultString); \
             ALOGE("%s failed: %s", message, resultString); \
         } else { \
-            ALOGE("%s failed with error code: %d", message, result); \
+            ALOGE("%s failed with error code: %d", message, res); \
         } \
-        return; \
-    }
+        return res; \
+    }(result)
 
-// Struct to hold application state
+// =============================================================================
+// 3D Math Library (Matrix)
+// =============================================================================
+struct Matrix4f {
+    float M[16];
+    static Matrix4f CreateIdentity() {
+        Matrix4f r;
+        for (int i = 0; i < 16; i++) r.M[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+        return r;
+    }
+};
+
+Matrix4f Matrix4f_Multiply(const Matrix4f& a, const Matrix4f& b) {
+    Matrix4f result;
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            result.M[i * 4 + j] = a.M[i * 4 + 0] * b.M[0 * 4 + j] +
+                                  a.M[i * 4 + 1] * b.M[1 * 4 + j] +
+                                  a.M[i * 4 + 2] * b.M[2 * 4 + j] +
+                                  a.M[i * 4 + 3] * b.M[3 * 4 + j];
+        }
+    }
+    return result;
+}
+
+Matrix4f Matrix4f_CreateProjectionFov(const XrFovf fov, const float nearZ, const float farZ) {
+    const float tanLeft = tanf(fov.angleLeft);
+    const float tanRight = tanf(fov.angleRight);
+    const float tanDown = tanf(fov.angleDown);
+    const float tanUp = tanf(fov.angleUp);
+    const float tanAngleWidth = tanRight - tanLeft;
+    const float tanAngleHeight = tanUp - tanDown;
+    Matrix4f result = {};
+    result.M[0] = 2.0f / tanAngleWidth;
+    result.M[5] = 2.0f / tanAngleHeight;
+    result.M[8] = (tanRight + tanLeft) / tanAngleWidth;
+    result.M[9] = (tanUp + tanDown) / tanAngleHeight;
+    result.M[10] = -(farZ + nearZ) / (farZ - nearZ);
+    result.M[11] = -1.0f;
+    result.M[14] = -2.0f * farZ * nearZ / (farZ - nearZ);
+    return result;
+}
+
+Matrix4f Matrix4f_CreateFromQuaternion(const XrQuaternionf& q) {
+    Matrix4f result = Matrix4f::CreateIdentity();
+    const float x2 = q.x + q.x, y2 = q.y + q.y, z2 = q.z + q.z;
+    const float xx = q.x * x2, xy = q.x * y2, xz = q.x * z2;
+    const float yy = q.y * y2, yz = q.y * z2, zz = q.z * z2;
+    const float wx = q.w * x2, wy = q.w * y2, wz = q.w * z2;
+    result.M[0] = 1.0f - (yy + zz); result.M[1] = xy - wz; result.M[2] = xz + wy;
+    result.M[4] = xy + wz; result.M[5] = 1.0f - (xx + zz); result.M[6] = yz - wx;
+    result.M[8] = xz - wy; result.M[9] = yz + wx; result.M[10] = 1.0f - (xx + yy);
+    return result;
+}
+
+Matrix4f Matrix4f_CreateView(const XrPosef& pose) {
+    Matrix4f rotation = Matrix4f_CreateFromQuaternion(pose.orientation);
+    Matrix4f translation = Matrix4f::CreateIdentity();
+    translation.M[12] = -pose.position.x;
+    translation.M[13] = -pose.position.y;
+    translation.M[14] = -pose.position.z;
+    return Matrix4f_Multiply(rotation, translation);
+}
+
+Matrix4f Matrix4f_CreateTranslation(float x, float y, float z) {
+    Matrix4f r = Matrix4f::CreateIdentity();
+    r.M[12] = x; r.M[13] = y; r.M[14] = z;
+    return r;
+}
+
+Matrix4f Matrix4f_CreateRotation(float angle, float x, float y, float z) {
+    Matrix4f r = Matrix4f::CreateIdentity();
+    float c = cosf(angle), s = sinf(angle);
+    r.M[0] = x*x*(1-c)+c;   r.M[1] = y*x*(1-c)+z*s; r.M[2] = x*z*(1-c)-y*s;
+    r.M[4] = x*y*(1-c)-z*s; r.M[5] = y*y*(1-c)+c;   r.M[6] = y*z*(1-c)+x*s;
+    r.M[8] = x*z*(1-c)+y*s; r.M[9] = y*z*(1-c)-x*s; r.M[10]= z*z*(1-c)+c;
+    return r;
+}
+
+// =============================================================================
+// App State & Structures
+// =============================================================================
+struct GraphicsState {
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLContext context = EGL_NO_CONTEXT;
+    EGLConfig config = nullptr;
+};
+
+struct Swapchain {
+    XrSwapchain handle = XR_NULL_HANDLE;
+    int32_t width = 0;
+    int32_t height = 0;
+    std::vector<XrSwapchainImageOpenGLESKHR> images;
+};
+
+struct GraphicsPipeline {
+    GLuint shaderProgram = 0;
+    GLint mvpLocation = -1;
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLuint ebo = 0;
+};
+
 struct AppState {
     JavaVM* vm = nullptr;
     jobject mainActivity = nullptr;
@@ -45,82 +147,313 @@ struct AppState {
     XrSession xrSession = XR_NULL_HANDLE;
     XrSystemId systemId = XR_NULL_SYSTEM_ID;
     XrSpace stageSpace = XR_NULL_HANDLE;
+    GraphicsState graphics = {};
+    GraphicsPipeline pipeline = {};
+    std::vector<XrViewConfigurationView> viewConfigs;
+    std::vector<Swapchain> swapchains;
+    std::vector<XrView> views;
+    std::vector<uint32_t> framebuffers;
+    std::thread appThread;
+    std::mutex appMutex;
+    std::condition_variable appCondition;
     bool resumed = false;
-    std::thread renderThread;
+    bool running = false;
+    bool sessionReady = false;
 };
 static AppState appState = {};
+static float cubeRotation = 0.0f;
+
+// =============================================================================
+// Graphics Setup & Lifecycle
+// =============================================================================
+
+bool CreateGraphicsPipeline() {
+    const char* vertexShaderSrc = R"glsl(
+        #version 320 es
+        in vec3 aPos;
+        uniform mat4 uMvp;
+        out vec3 vColor;
+        void main() {
+            gl_Position = uMvp * vec4(aPos, 1.0);
+            vColor = aPos + 0.5;
+        }
+    )glsl";
+    const char* fragmentShaderSrc = R"glsl(
+        #version 320 es
+        precision mediump float;
+        in vec3 vColor;
+        out vec4 FragColor;
+        void main() {
+            FragColor = vec4(vColor, 1.0);
+        }
+    )glsl";
+
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexShaderSrc, nullptr);
+    glCompileShader(vertexShader);
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSrc, nullptr);
+    glCompileShader(fragmentShader);
+    appState.pipeline.shaderProgram = glCreateProgram();
+    glAttachShader(appState.pipeline.shaderProgram, vertexShader);
+    glAttachShader(appState.pipeline.shaderProgram, fragmentShader);
+    glLinkProgram(appState.pipeline.shaderProgram);
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+    appState.pipeline.mvpLocation = glGetUniformLocation(appState.pipeline.shaderProgram, "uMvp");
+
+    float vertices[] = {
+            -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f, -0.5f, 0.5f,-0.5f,
+            -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f
+    };
+    unsigned int indices[] = {
+            0,1,2, 2,3,0, 4,5,6, 6,7,4, 0,4,7, 7,3,0,
+            1,5,6, 6,2,1, 0,1,5, 5,4,0, 3,2,6, 6,7,3
+    };
+
+    glGenVertexArrays(1, &appState.pipeline.vao);
+    glGenBuffers(1, &appState.pipeline.vbo);
+    glGenBuffers(1, &appState.pipeline.ebo);
+    glBindVertexArray(appState.pipeline.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, appState.pipeline.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, appState.pipeline.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+
+    return true;
+}
+
+bool initializeGraphics() {
+    ALOGI("Initializing EGL graphics...");
+    appState.graphics.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (appState.graphics.display == EGL_NO_DISPLAY) { ALOGE("eglGetDisplay failed"); return false; }
+    EGLint major, minor;
+    if (!eglInitialize(appState.graphics.display, &major, &minor)) { ALOGE("eglInitialize failed"); return false; }
+    ALOGI("EGL initialized, version %d.%d", major, minor);
+    const EGLint attribs[] = { EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_NONE };
+    EGLint num_config;
+    if (!eglChooseConfig(appState.graphics.display, attribs, &appState.graphics.config, 1, &num_config)) { ALOGE("eglChooseConfig failed"); return false; }
+    const EGLint context_attribs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+    appState.graphics.context = eglCreateContext(appState.graphics.display, appState.graphics.config, EGL_NO_CONTEXT, context_attribs);
+    if (appState.graphics.context == EGL_NO_CONTEXT) { ALOGE("eglCreateContext failed"); return false; }
+    ALOGI("EGL Context created successfully.");
+    return true;
+}
+
+void app_main(); // Forward declaration
 
 extern "C" JNIEXPORT void JNICALL
-Java_cnit355_finalproject_irisagentc_MainActivity_onCreateNative(
-        JNIEnv* env, jobject, jobject activity) {
-
+Java_cnit355_finalproject_irisagentc_MainActivity_onCreateNative(JNIEnv* env, jobject, jobject activity) {
     ALOGI("--- Native onCreate ---");
     env->GetJavaVM(&appState.vm);
     appState.mainActivity = env->NewGlobalRef(activity);
-
-    XrInstanceCreateInfoAndroidKHR createInfoAndroid = {XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
-    createInfoAndroid.applicationVM = appState.vm;
-    createInfoAndroid.applicationActivity = appState.mainActivity;
-
-    XrInstanceCreateInfo createInfo = {XR_TYPE_INSTANCE_CREATE_INFO};
-    createInfo.next = &createInfoAndroid;
-    strcpy(createInfo.applicationInfo.applicationName, "ProjectIrisMVP");
-    createInfo.applicationInfo.applicationVersion = 1;
-    strcpy(createInfo.applicationInfo.engineName, "CustomEngine");
-    createInfo.applicationInfo.engineVersion = 1;
-    createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
-
-    std::vector<const char*> extensions = {
-            XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME, // Corrected spelling
-            XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,      // Corrected spelling
-            "XR_EPIC_view_configuration_passthrough"
-    };
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-    createInfo.enabledExtensionNames = extensions.data();
-
-    XrResult result = xrCreateInstance(&createInfo, &appState.xrInstance);
-    OXR_CHECK(appState.xrInstance, result, "xrCreateInstance");
-    ALOGI("OpenXR instance created successfully.");
-
-    XrSystemGetInfo systemGetInfo = {XR_TYPE_SYSTEM_GET_INFO};
-    systemGetInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
-    result = xrGetSystem(appState.xrInstance, &systemGetInfo, &appState.systemId);
-    OXR_CHECK(appState.xrInstance, result, "xrGetSystem");
-
-    ALOGI("Native setup complete. Waiting for onResume.");
-}
-
-void renderLoop() {
-    ALOGI("Render thread started.");
-    while (appState.resumed) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    ALOGI("Render thread finished.");
+    appState.running = true;
+    appState.appThread = std::thread(app_main);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_cnit355_finalproject_irisagentc_MainActivity_onResumeNative(JNIEnv*, jobject) {
     ALOGI("--- Native onResume ---");
+    std::unique_lock<std::mutex> lock(appState.appMutex);
     appState.resumed = true;
-    appState.renderThread = std::thread(renderLoop);
+    appState.appCondition.notify_all();
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_cnit355_finalproject_irisagentc_MainActivity_onPauseNative(JNIEnv*, jobject) {
     ALOGI("--- Native onPause ---");
+    std::unique_lock<std::mutex> lock(appState.appMutex);
     appState.resumed = false;
-    if (appState.renderThread.joinable()) {
-        appState.renderThread.join();
-    }
+    appState.appCondition.notify_all();
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_cnit355_finalproject_irisagentc_MainActivity_onDestroyNative(JNIEnv* env, jobject) {
     ALOGI("--- Native onDestroy ---");
-    if(appState.stageSpace != XR_NULL_HANDLE) xrDestroySpace(appState.stageSpace);
-    if(appState.xrSession != XR_NULL_HANDLE) xrDestroySession(appState.xrSession);
-    if(appState.xrInstance != XR_NULL_HANDLE) xrDestroyInstance(appState.xrInstance);
+    std::unique_lock<std::mutex> lock(appState.appMutex);
+    appState.running = false;
+    appState.appCondition.notify_all();
+    lock.unlock();
+    if (appState.appThread.joinable()) {
+        appState.appThread.join();
+    }
     env->DeleteGlobalRef(appState.mainActivity);
-    appState = {};
-    ALOGI("Native cleanup complete.");
+}
+
+// =============================================================================
+// Main Application Thread
+// =============================================================================
+void app_main() {
+    JNIEnv* env;
+    appState.vm->AttachCurrentThread(&env, nullptr);
+    ALOGI("App thread attached to JVM.");
+
+    // All local variables for initialization, declared at the top of the scope
+    XrApplicationInfo appInfo = {};
+    XrInstanceCreateInfo createInfo = {XR_TYPE_INSTANCE_CREATE_INFO};
+    XrLoaderInitInfoAndroidKHR loaderInitInfo = {XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
+    PFN_xrInitializeLoaderKHR xrInitializeLoaderKHR = nullptr;
+    XrInstanceCreateInfoAndroidKHR createInfoAndroid = {XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
+    std::vector<const char*> extensions;
+    XrSystemGetInfo systemGetInfo = {XR_TYPE_SYSTEM_GET_INFO, nullptr, XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
+    PFN_xrGetOpenGLESGraphicsRequirementsKHR pfnGetOpenGLESGraphicsRequirementsKHR = nullptr;
+    XrGraphicsRequirementsOpenGLESKHR graphicsRequirements = {XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
+    XrGraphicsBindingOpenGLESAndroidKHR graphicsBinding = {XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR};
+    XrSessionCreateInfo sessionCreateInfo = {XR_TYPE_SESSION_CREATE_INFO};
+    XrReferenceSpaceCreateInfo spaceCreateInfo = {XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    uint32_t viewCount = 0;
+
+    {
+        std::unique_lock<std::mutex> lock(appState.appMutex);
+        ALOGI("App thread waiting for resume...");
+        appState.appCondition.wait(lock, [] { return appState.resumed; });
+        ALOGI("App thread resumed.");
+    }
+
+    // --- OpenXR Initialization ---
+    strcpy(appInfo.applicationName, "ProjectIrisMVP"); appInfo.applicationVersion = 1; strcpy(appInfo.engineName, "CustomEngine"); appInfo.engineVersion = 1; appInfo.apiVersion = XR_CURRENT_API_VERSION; createInfo.applicationInfo = appInfo; loaderInitInfo.applicationVM = appState.vm; loaderInitInfo.applicationContext = appState.mainActivity; if (OXR_CHECK(nullptr, xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)&xrInitializeLoaderKHR), "xrGetInstanceProcAddr") != XR_SUCCESS) goto cleanup; if (OXR_CHECK(nullptr, xrInitializeLoaderKHR((const XrLoaderInitInfoBaseHeaderKHR*)&loaderInitInfo), "xrInitializeLoaderKHR") != XR_SUCCESS) goto cleanup; ALOGI("OpenXR Loader initialized."); createInfoAndroid.applicationVM = appState.vm; createInfoAndroid.applicationActivity = appState.mainActivity; createInfo.next = &createInfoAndroid; extensions = {XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME, XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME}; createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size()); createInfo.enabledExtensionNames = extensions.data(); if (OXR_CHECK(appState.xrInstance, xrCreateInstance(&createInfo, &appState.xrInstance), "xrCreateInstance") != XR_SUCCESS) goto cleanup; ALOGI("OpenXR instance created."); if (OXR_CHECK(appState.xrInstance, xrGetSystem(appState.xrInstance, &systemGetInfo, &appState.systemId), "xrGetSystem") != XR_SUCCESS) goto cleanup; ALOGI("OpenXR system found.");
+
+    if (!initializeGraphics()) goto cleanup;
+
+    // ** THE FIX IS HERE **
+    // Bind the EGL context to the current thread.
+    if (eglMakeCurrent(appState.graphics.display, EGL_NO_SURFACE, EGL_NO_SURFACE, appState.graphics.context) == EGL_FALSE) {
+        ALOGE("eglMakeCurrent failed!");
+        goto cleanup;
+    }
+    ALOGI("EGL context made current on app thread.");
+
+    if (OXR_CHECK(appState.xrInstance, xrGetInstanceProcAddr(appState.xrInstance, "xrGetOpenGLESGraphicsRequirementsKHR", (PFN_xrVoidFunction*)&pfnGetOpenGLESGraphicsRequirementsKHR), "xrGetInstanceProcAddr") != XR_SUCCESS) goto cleanup; if (OXR_CHECK(appState.xrInstance, pfnGetOpenGLESGraphicsRequirementsKHR(appState.xrInstance, appState.systemId, &graphicsRequirements), "xrGetOpenGLESGraphicsRequirementsKHR") != XR_SUCCESS) goto cleanup; graphicsBinding.display = appState.graphics.display; graphicsBinding.config = appState.graphics.config; graphicsBinding.context = appState.graphics.context; sessionCreateInfo.next = &graphicsBinding; sessionCreateInfo.systemId = appState.systemId; if (OXR_CHECK(appState.xrInstance, xrCreateSession(appState.xrInstance, &sessionCreateInfo, &appState.xrSession), "xrCreateSession") != XR_SUCCESS) goto cleanup; ALOGI("OpenXR session created."); spaceCreateInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE; spaceCreateInfo.poseInReferenceSpace = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}}; if (OXR_CHECK(appState.xrInstance, xrCreateReferenceSpace(appState.xrSession, &spaceCreateInfo, &appState.stageSpace), "xrCreateReferenceSpace") != XR_SUCCESS) goto cleanup; ALOGI("OpenXR stage space created.");
+
+    // --- Swapchain Creation ---
+    xrEnumerateViewConfigurationViews(appState.xrInstance, appState.systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &viewCount, nullptr);
+    appState.viewConfigs.resize(viewCount, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
+    appState.views.resize(viewCount, {XR_TYPE_VIEW});
+    xrEnumerateViewConfigurationViews(appState.xrInstance, appState.systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, viewCount, &viewCount, appState.viewConfigs.data());
+    appState.swapchains.resize(viewCount);
+    appState.framebuffers.resize(viewCount);
+    for (uint32_t i = 0; i < viewCount; ++i) { auto& sc = appState.swapchains[i]; sc.width = appState.viewConfigs[i].recommendedImageRectWidth; sc.height = appState.viewConfigs[i].recommendedImageRectHeight; XrSwapchainCreateInfo swapchainCI = {XR_TYPE_SWAPCHAIN_CREATE_INFO}; swapchainCI.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT; swapchainCI.format = GL_RGBA8; swapchainCI.width = static_cast<uint32_t>(sc.width); swapchainCI.height = static_cast<uint32_t>(sc.height); swapchainCI.sampleCount = 1; swapchainCI.faceCount = 1; swapchainCI.arraySize = 1; swapchainCI.mipCount = 1; OXR_CHECK(appState.xrInstance, xrCreateSwapchain(appState.xrSession, &swapchainCI, &sc.handle), "xrCreateSwapchain"); uint32_t imageCount = 0; xrEnumerateSwapchainImages(sc.handle, 0, &imageCount, nullptr); sc.images.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR}); xrEnumerateSwapchainImages(sc.handle, imageCount, &imageCount, (XrSwapchainImageBaseHeader*)sc.images.data()); }
+    ALOGI("Swapchains created for %d views.", viewCount);
+
+    CreateGraphicsPipeline();
+
+    // --- Main Loop ---
+    while (appState.running) {
+        XrEventDataBuffer eventData = {XR_TYPE_EVENT_DATA_BUFFER};
+        while (xrPollEvent(appState.xrInstance, &eventData) == XR_SUCCESS) {
+            if (eventData.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+                auto ssc = *reinterpret_cast<XrEventDataSessionStateChanged*>(&eventData);
+                ALOGI("OpenXR session state changed to %d", ssc.state);
+                if (ssc.state == XR_SESSION_STATE_READY) {
+                    XrSessionBeginInfo bi = {XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+                    xrBeginSession(appState.xrSession, &bi);
+                    appState.sessionReady = true;
+                } else if (ssc.state == XR_SESSION_STATE_STOPPING) {
+                    xrEndSession(appState.xrSession);
+                    appState.sessionReady = false;
+                } else if (ssc.state == XR_SESSION_STATE_EXITING || ssc.state == XR_SESSION_STATE_LOSS_PENDING) {
+                    appState.running = false;
+                }
+            }
+            eventData = {XR_TYPE_EVENT_DATA_BUFFER};
+        }
+
+        if (!appState.sessionReady || !appState.resumed) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        XrFrameState frameState = {XR_TYPE_FRAME_STATE};
+        XrFrameWaitInfo frameWaitInfo = {XR_TYPE_FRAME_WAIT_INFO};
+        xrWaitFrame(appState.xrSession, &frameWaitInfo, &frameState);
+
+        xrBeginFrame(appState.xrSession, nullptr);
+
+        std::vector<XrCompositionLayerBaseHeader*> layers;
+        XrCompositionLayerProjection layer = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+        std::vector<XrCompositionLayerProjectionView> projectionViews(viewCount, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
+
+        if (frameState.shouldRender) {
+            XrViewState viewState = {XR_TYPE_VIEW_STATE};
+            XrViewLocateInfo viewLocateInfo = {XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, frameState.predictedDisplayTime, appState.stageSpace};
+            uint32_t viewCountOutput;
+            xrLocateViews(appState.xrSession, &viewLocateInfo, &viewState, viewCount, &viewCountOutput, appState.views.data());
+
+            for (uint32_t i = 0; i < viewCount; ++i) {
+                auto& sc = appState.swapchains[i];
+                uint32_t imageIndex;
+                xrAcquireSwapchainImage(sc.handle, nullptr, &imageIndex);
+                XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+                xrWaitSwapchainImage(sc.handle, &waitInfo);
+
+                if (appState.framebuffers[i] == 0) glGenFramebuffers(1, &appState.framebuffers[i]);
+                glBindFramebuffer(GL_FRAMEBUFFER, appState.framebuffers[i]);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sc.images[imageIndex].image, 0);
+
+                glViewport(0, 0, sc.width, sc.height);
+                glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                glEnable(GL_DEPTH_TEST);
+
+                Matrix4f proj = Matrix4f_CreateProjectionFov(appState.views[i].fov, 0.1f, 100.0f);
+                Matrix4f view = Matrix4f_CreateView(appState.views[i].pose);
+
+                cubeRotation += 0.01f;
+                Matrix4f model = Matrix4f_CreateTranslation(0.0f, 0.0f, -2.0f);
+                model = Matrix4f_Multiply(model, Matrix4f_CreateRotation(cubeRotation, 0.5f, 1.0f, 0.2f));
+                Matrix4f mvp = Matrix4f_Multiply(Matrix4f_Multiply(proj, view), model);
+
+                glUseProgram(appState.pipeline.shaderProgram);
+                glUniformMatrix4fv(appState.pipeline.mvpLocation, 1, GL_FALSE, mvp.M);
+                glBindVertexArray(appState.pipeline.vao);
+                glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+                glBindVertexArray(0);
+                glUseProgram(0);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                xrReleaseSwapchainImage(sc.handle, nullptr);
+
+                projectionViews[i].pose = appState.views[i].pose;
+                projectionViews[i].fov = appState.views[i].fov;
+                projectionViews[i].subImage.swapchain = sc.handle;
+                projectionViews[i].subImage.imageRect = {{0, 0}, {sc.width, sc.height}};
+            }
+
+            layer.space = appState.stageSpace; layer.viewCount = viewCount; layer.views = projectionViews.data();
+            layers.push_back((XrCompositionLayerBaseHeader*)&layer);
+        }
+
+        XrFrameEndInfo frameEndInfo = {XR_TYPE_FRAME_END_INFO, nullptr, frameState.predictedDisplayTime, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, (uint32_t)layers.size(), layers.data()};
+        xrEndFrame(appState.xrSession, &frameEndInfo);
+    }
+
+    cleanup:
+    ALOGI("Cleaning up native resources...");
+    glDeleteFramebuffers(appState.framebuffers.size(), appState.framebuffers.data());
+    glDeleteProgram(appState.pipeline.shaderProgram);
+    glDeleteBuffers(1, &appState.pipeline.vbo);
+    glDeleteBuffers(1, &appState.pipeline.ebo);
+    glDeleteVertexArrays(1, &appState.pipeline.vao);
+    for(auto& sc : appState.swapchains) { if (sc.handle != XR_NULL_HANDLE) xrDestroySwapchain(sc.handle); }
+    if (appState.stageSpace != XR_NULL_HANDLE) xrDestroySpace(appState.stageSpace);
+    if (appState.xrSession != XR_NULL_HANDLE) xrDestroySession(appState.xrSession);
+    if (appState.graphics.context != EGL_NO_CONTEXT) {
+        eglMakeCurrent(appState.graphics.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        eglDestroyContext(appState.graphics.display, appState.graphics.context);
+    }
+    if (appState.graphics.display != EGL_NO_DISPLAY) eglTerminate(appState.graphics.display);
+    if (appState.xrInstance != XR_NULL_HANDLE) xrDestroyInstance(appState.xrInstance);
+
+    // Manual cleanup
+    appState.xrInstance = XR_NULL_HANDLE;
+    appState.xrSession = XR_NULL_HANDLE;
+    appState.stageSpace = XR_NULL_HANDLE;
+    appState.systemId = XR_NULL_SYSTEM_ID;
+    appState.graphics = {};
+
+    ALOGI("App thread detached from JVM.");
+    appState.vm->DetachCurrentThread();
 }
